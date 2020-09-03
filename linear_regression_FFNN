@@ -1,0 +1,185 @@
+"""
+Created on Wed Aug 26 18:07:05 2020
+
+@author: DEEPSHIKHA KUMARI
+"""
+
+import pandas as pd
+import seaborn as sns
+import numpy as np
+import matplotlib.pyplot as plt
+from itertools import chain 
+
+#%% reading csv files
+train=pd.read_csv(r'C:\Users\DEEPSHIKHA KUMARI\Documents\Kaggle Competition\OSIC\train.csv')
+test=pd.read_csv(r'C:\Users\DEEPSHIKHA KUMARI\Documents\Kaggle Competition\OSIC\test.csv')
+sample=pd.read_csv(r'C:\Users\DEEPSHIKHA KUMARI\Documents\Kaggle Competition\OSIC\sample_submission.csv')
+
+#**********PART 1*************
+
+#%% train_u is a dataframe containing every patient's fixed parameters- Patient, Age, Sex, SmokingStatus
+# train_u : (176, 4)
+train_u=train['Patient'].drop_duplicates()
+train_u=train.iloc[train_u.index.values,:]
+train_u.drop(['Weeks','FVC','Percent'],axis=1,inplace=True)
+
+#%% plotting patient's age distribution for different genders
+ax=sns.distplot(train_u.loc[train_u['Sex']=='Male',:]['Age'], color='orange', label='Male')
+ax=sns.distplot(train_u.loc[train_u['Sex']=='Female',:]['Age'], color='blue', label='Female')
+ax.legend()
+
+#%% plotting patient's age distribution for different Smoking Status
+ax=sns.distplot(train_u.loc[train_u['SmokingStatus']=='Ex-smoker',:]['Age'],  color='red', label='Ex-smoker')
+ax=sns.distplot(train_u.loc[train_u['SmokingStatus']=='Never smoked',:]['Age'], color='blue', label='Never smoked')
+ax=sns.distplot(train_u.loc[train_u['SmokingStatus']=='Currently smokes',:]['Age'], color='black', label='Currently smokes')
+ax.legend()
+
+#%% plotting boxplot and violinplot for visualizing all three paramters simultaneously
+sns.boxplot(train_u['Sex'], train_u['Age'], hue=train_u['SmokingStatus'])
+sns.violinplot(train_u['Sex'],train_u['Age'], hue=train_u['SmokingStatus'])
+
+#%% plotting countplot for different genders and smoking statuses
+sns.countplot(train_u['Sex'], hue=train_u['SmokingStatus'])
+
+#%% I had a doubt here as mininum is -5 but in sample_submission, it starts from -12. Why?
+print(min(train['Weeks']))
+print(max(train['Weeks']))
+
+# ***********PART 2************
+
+#%% Grouping train dataframe by'Patient' and plotting first 10 patients 'Weeks' vs 'FVC' plots (looks like exponentially decaying graph with kinks)
+pt_id=train['Patient']
+train_pt=train.groupby('Patient')
+
+i=0
+for e,gr in train_pt:
+    i+=1
+    #print(i)
+    #print(gr)
+    plt.plot(gr['Weeks'], gr['Percent'])
+    plt.show()
+    if (i>=10):
+        break
+  
+#%% Defined a new dataframe 'sub' which is our submission file. This contains the parameter 'Patient_week' and null columns for 'FVC' and 'Confidence'.
+
+sub=pd.DataFrame()
+pt_w=[]
+for i in range(min(train['Weeks']),max(train['Weeks'])+1):
+    for pt in test['Patient']:
+        pt_w.append(str(pt)+'_'+str(i))
+        
+sub['Patient_Week']=pt_w
+sub['FVC'],sub['Confidence']=np.zeros(sub.shape[0]), np.zeros(sub.shape[0])
+
+#%% Defining X_train using train_u and converting categorical data into one-hot encoded vectors using get_dummies.
+# X_train : (176, 6)
+X_train=train_u.copy()
+smoke_dum=X_train['SmokingStatus'].str.get_dummies("  ")
+sex_dum=X_train['Sex'].str.get_dummies("  ")
+X_train.drop(['Patient','SmokingStatus','Sex'], axis=1, inplace=True)
+X_train=np.array(X_train)
+
+sex_dum=np.array(sex_dum.to_numpy().tolist())
+smoke_dum=np.array(smoke_dum.to_numpy().tolist())
+
+X_train=np.hstack((X_train, sex_dum, smoke_dum))
+
+#%% According to approach 2: features are inital FVC, intial percent, ith week and fixed paramters
+# FVC0 is appended with every patients first week's FVC. Same thing for Per0.
+# WeekI is appended with every patient's 'Week' column.
+# tile_len contains the length of patient's record
+# dell is the delete list which has the index of 0th week of every patient.
+FVC0=[]
+Per0=[]
+WeekI=[]
+tile_len=[]
+group=train.groupby('Patient')
+dell=[]
+for i, gr in group:
+    #print(i)
+    #print(gr)
+    tile_len.append(gr.shape[0])
+    i0=gr.index.values[0]
+    WeekI.append(list(gr['Weeks']))
+    FVC0.append(gr.loc[i0,'FVC'])
+    Per0.append(gr.loc[i0,'Percent'])
+    dell.append(gr.index.values[0])
+    
+Per0=np.array(Per0).reshape((len(Per0),1))
+FVC0=np.array(FVC0).reshape((len(FVC0),1))
+
+X_train=np.hstack((X_train, Per0, FVC0))
+
+#%% train_data is a numpy array which has X_train's data repeated tile_len[i] times for i in (0,176).
+tmp=[]
+train_data=[]
+for i in range(X_train.shape[0]):
+    for j in range(tile_len[i]):
+        train_data.append(X_train[i])
+
+train_data=np.array(train_data).reshape([train.shape[0], 8])
+
+#%% Stacking ith week with train_data and copying it to X_train
+WeekI=list(chain.from_iterable(WeekI)) 
+WeekI=np.array(WeekI).reshape((len(WeekI),1))
+train_data=np.hstack((train_data, WeekI))
+
+# Converting all the elements in X_train to float type
+X_train=train_data
+for i in range(X_train.shape[0]):
+    for j in range(X_train.shape[1]):
+        X_train[i,j]=float(X_train[i,j])
+
+y_train=train['FVC'].to_numpy()
+
+# Deleting elements of X_train and y_train from indices present in dell.
+X_train=np.delete(X_train, dell, axis=0)
+y_train=np.delete(y_train, dell, axis=0)
+
+# ***********PART 3************
+#%% Linear Regression
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_squared_error
+
+model=LinearRegression()
+model.fit(X_train, y_train)
+
+#%%
+yhat=model.predict(X_train)
+loss=mean_squared_error(yhat, y_train)  
+
+#%%
+plt.plot(yhat, label='Predicted')
+plt.plot(y_train, label='True')
+plt.legend()
+plt.show()
+
+#%% Feed-forward Neural Network with BPA
+from keras.layers import Dense
+from keras.models import Sequential
+from keras import optimizers
+from keras.initializers import he_uniform,glorot_uniform
+from keras.initializers import zeros, ones
+
+model=Sequential()
+model.add(Dense(500, activation='relu'))
+model.add(Dense(500, activation='relu'))
+model.add(Dense(100, activation='relu'))
+model.add(Dense(100, activation='relu'))
+model.add(Dense(50, activation='relu'))
+model.add(Dense(1))
+model.compile(loss='mse', optimizer='adam',metrics=['accuracy'])
+#model.summary()
+
+#%%
+hist=model.fit(X_train, y_train, epochs=100, batch_size=32, verbose=1)    
+
+#%%
+yhat=model.predict(X_train)
+
+#%%
+plt.plot(yhat, label='Predicted')
+plt.plot(y_train, label='True')
+plt.legend()
+plt.show()
